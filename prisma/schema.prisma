@@ -1,0 +1,120 @@
+// Esquema de base de datos del backend, calcado de las entidades Room
+// definidas en el diseño de arquitectura del proyecto (sección 5).
+
+datasource db {
+  provider  = "postgresql"
+  // Usada en tiempo de ejecución por la app (pooler, soporta muchas conexiones concurrentes).
+  url       = env("DATABASE_URL")
+  // Usada solo por Prisma para las migraciones (necesita una conexión de sesión completa,
+  // que el pooler en modo "transaction" no soporta bien para operaciones DDL).
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Usuario {
+  id             Int     @id @default(autoincrement())
+  usuario        String  @unique
+  contrasenaHash String
+  nombreNegocio  String?
+
+  @@map("usuarios")
+}
+
+model Producto {
+  id                 Int      @id @default(autoincrement())
+  nombre             String
+  referencia         String
+  talla              String?
+  color              String?
+  categoria          String?
+  costo              Float
+  precioVenta        Float
+  cantidadDisponible Int
+  activo             Boolean  @default(true)
+  fechaCreacion      DateTime @default(now())
+
+  movimientos   MovimientoInventario[]
+  detalleVentas DetalleVenta[]
+
+  @@map("productos")
+}
+
+enum TipoMovimiento {
+  ENTRADA
+  SALIDA
+}
+
+model MovimientoInventario {
+  id         Int            @id @default(autoincrement())
+  productoId Int
+  producto   Producto       @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  tipo       TipoMovimiento
+  cantidad   Int
+  motivo     String
+  fecha      DateTime       @default(now())
+
+  @@map("movimientos_inventario")
+}
+
+model Cliente {
+  id            Int      @id @default(autoincrement())
+  nombre        String
+  telefono      String?
+  fechaRegistro DateTime @default(now())
+
+  ventas Venta[]
+
+  @@map("clientes")
+}
+
+enum FormaPago {
+  CONTADO
+  CREDITO
+}
+
+enum EstadoVenta {
+  PAGADA
+  PENDIENTE
+  ANULADA
+}
+
+model Venta {
+  id         Int         @id @default(autoincrement())
+  fecha      DateTime    @default(now())
+  formaPago  FormaPago   @default(CONTADO)
+  clienteId  Int?
+  cliente    Cliente?    @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+  valorTotal Float
+  estado     EstadoVenta @default(PAGADA)
+
+  detalles DetalleVenta[]
+  abonos   Abono[]
+
+  @@map("ventas")
+}
+
+model DetalleVenta {
+  id             Int      @id @default(autoincrement())
+  ventaId        Int
+  venta          Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  productoId     Int
+  producto       Producto @relation(fields: [productoId], references: [id])
+  cantidad       Int
+  precioUnitario Float
+  costoUnitario  Float
+
+  @@map("detalle_ventas")
+}
+
+model Abono {
+  id      Int      @id @default(autoincrement())
+  ventaId Int
+  venta   Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  monto   Float
+  fecha   DateTime @default(now())
+
+  @@map("abonos")
+}
