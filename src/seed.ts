@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { TipoMovimiento } from '@prisma/client';
 import { prisma } from './config/prisma';
@@ -10,10 +9,20 @@ import { prisma } from './config/prisma';
  */
 async function main() {
   const contrasenaHash = await bcrypt.hash('1234abcd', 10);
+  const respuestaSeguridadHash = await bcrypt.hash('firulais', 10);
   await prisma.usuario.upsert({
     where: { usuario: 'tienda.ropa' },
-    update: {},
-    create: { usuario: 'tienda.ropa', contrasenaHash, nombreNegocio: 'Mi tienda de ropa' },
+    update: {
+      preguntaSeguridad: '¿Cuál es el nombre de tu primera mascota?',
+      respuestaSeguridadHash,
+    },
+    create: {
+      usuario: 'tienda.ropa',
+      contrasenaHash,
+      nombreNegocio: 'Mi tienda de ropa',
+      preguntaSeguridad: '¿Cuál es el nombre de tu primera mascota?',
+      respuestaSeguridadHash,
+    },
   });
 
   const productosIniciales = [
@@ -37,7 +46,7 @@ async function main() {
     });
   }
 
-  console.log('Datos semilla creados: usuario "tienda.ropa" / contraseña "1234abcd", y 3 productos de ejemplo.');
+  console.log('Datos semilla creados: usuario "tienda.ropa" / contraseña "1234abcd" (pregunta de seguridad: "firulais"), y 3 productos de ejemplo.');
 }
 
 main()

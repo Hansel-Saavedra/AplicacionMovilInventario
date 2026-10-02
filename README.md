@@ -51,6 +51,7 @@ comentarios `RF-XXX` que trazan cada función a su requerimiento se mantuvieron 
 
 - **Usuario:** `tienda.ropa`
 - **Contraseña:** `1234abcd`
+- **Pregunta de seguridad:** ¿Cuál es el nombre de tu primera mascota? → **Respuesta:** `firulais`
 
 ## Conectar con Supabase
 
@@ -118,12 +119,15 @@ uno a uno con los repositorios de Kotlin).
 
 ## Endpoints principales
 
-Todas las rutas, excepto `/auth/login`, requieren el encabezado
+Todas las rutas, excepto `/auth/login`, `/auth/pregunta-seguridad` y
+`/auth/restablecer-contrasena`, requieren el encabezado
 `Authorization: Bearer <token>` obtenido al iniciar sesión.
 
 | Método | Ruta | Requerimiento |
 |---|---|---|
 | POST | `/auth/login` | RF-USR-01 |
+| GET | `/auth/pregunta-seguridad?usuario=` | RF-USR-03 (paso 1) |
+| POST | `/auth/restablecer-contrasena` | RF-USR-03 (paso 2) |
 | GET | `/productos` | RF-INV-04, RF-INV-05 |
 | GET | `/productos/filtros` | valores para talla/color/categoría |
 | POST | `/productos` | RF-INV-01, RF-GAN-01 |
@@ -131,6 +135,7 @@ Todas las rutas, excepto `/auth/login`, requieren el encabezado
 | PATCH | `/productos/:id/desactivar` | RF-INV-03 |
 | POST | `/productos/:id/entradas` | RF-INV-06 |
 | GET | `/productos/:id/movimientos` | RF-INV-09 |
+| POST | `/productos/:id/foto` (multipart, campo `foto`) | RF-INV-10 |
 | POST | `/ventas` | RF-VEN-01 a RF-VEN-04, RF-INV-07 |
 | GET | `/ventas` | RF-VEN-05 |
 | PATCH | `/ventas/:id/anular` | RF-VEN-06 |
@@ -142,6 +147,13 @@ Todas las rutas, excepto `/auth/login`, requieren el encabezado
 | GET | `/ganancias/resumen?desde=&hasta=` | RF-GAN-03, RF-GAN-06 |
 | GET | `/ganancias/por-producto?desde=&hasta=` | RF-GAN-04 |
 | GET | `/ganancias/proyeccion` | RF-GAN-05 |
+| GET | `/ganancias/iva?desde=&hasta=` | IVA generado en el periodo (19 %) |
+
+Todas las respuestas que incluyen un producto (`GET /productos`, `GET /productos/:id`,
+y las de crear/editar/desactivar/reabastecer/subir foto) traen además dos campos
+calculados: `valorBaseVenta` y `valorIvaVenta`, que descomponen `precioVenta`
+—interpretado como el precio final al público, IVA incluido— en su valor base
+gravable y el IVA correspondiente (tarifa general del 19 %).
 
 ### Ejemplo: iniciar sesión
 
@@ -150,6 +162,34 @@ curl -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"usuario": "tienda.ropa", "contrasena": "1234abcd"}'
 ```
+
+### Ejemplo: recuperar contraseña
+
+```bash
+# Paso 1: consultar la pregunta de seguridad
+curl "http://localhost:3000/auth/pregunta-seguridad?usuario=tienda.ropa"
+
+# Paso 2: responder y establecer la nueva contraseña
+curl -X POST http://localhost:3000/auth/restablecer-contrasena \
+  -H "Content-Type: application/json" \
+  -d '{"usuario": "tienda.ropa", "respuestaSeguridad": "firulais", "nuevaContrasena": "otraClaveSegura"}'
+```
+
+### Ejemplo: subir la foto de un producto
+
+```bash
+curl -X POST http://localhost:3000/productos/1/foto \
+  -H "Authorization: Bearer <TOKEN_OBTENIDO_EN_EL_LOGIN>" \
+  -F "foto=@/ruta/a/la/imagen.jpg"
+```
+
+### Ejemplo: consultar el IVA generado en un periodo
+
+```bash
+curl "http://localhost:3000/ganancias/iva?desde=2026-09-01&hasta=2026-09-30" \
+  -H "Authorization: Bearer <TOKEN_OBTENIDO_EN_EL_LOGIN>"
+```
+Respuesta: `{ "valorBase": 33613.45, "valorIva": 6386.55, "valorTotal": 40000 }`
 
 ### Ejemplo: registrar una venta de contado
 
@@ -163,6 +203,66 @@ curl -X POST http://localhost:3000/ventas \
       }'
 ```
 
+## Actualizar una instalación ya desplegada
+
+Si ya tenías este backend corriendo (por ejemplo, en Render) antes de que se agregaran
+RF-USR-03 y RF-INV-10, el esquema de la base de datos cambió: se agregaron las columnas
+`preguntaSeguridad` y `respuestaSeguridadHash` en `usuarios`, y `imagenUrl` en `productos`.
+Para actualizar tu base de datos ya existente en Supabase:
+
+```bash
+npx prisma generate
+npx prisma migrate dev --name agregar_recuperacion_y_foto
+npm run seed
+```
+
+El `seed` es seguro de volver a ejecutar: no duplica productos ni usuarios, pero sí
+actualiza la pregunta de seguridad del usuario existente (ver Sección "Credenciales
+de prueba" más abajo). No olvides completar también las nuevas variables
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `SUPABASE_STORAGE_BUCKET` en Render.
+
+## Configurar el bucket de fotos (Supabase Storage)
+
+RF-INV-10 (foto de producto) sube las imágenes a Supabase Storage, en el mismo
+proyecto donde ya está la base de datos. Antes de usarlo:
+
+1. En el panel de Supabase, ve a **Storage** (menú lateral) → **New bucket**.
+2. Nómbralo `productos-fotos` (o el nombre que pongas en `SUPABASE_STORAGE_BUCKET`).
+3. Marca la opción **Public bucket** al crearlo — así las fotos se pueden ver
+   directamente desde su URL, sin necesitar autenticación adicional.
+4. Copia `SUPABASE_URL` y la clave **service_role** (Settings → API) a tu `.env`,
+   siguiendo las instrucciones del `.env.example`.
+5. Ejecuta las migraciones (`npx prisma migrate dev`) para crear la columna
+   `imagenUrl` en la tabla `productos`.
+
+Si estas variables no están configuradas, el endpoint `/productos/:id/foto`
+responde con un error claro en vez de fallar de forma silenciosa.
+
+## Pruebas automatizadas
+
+El backend incluye una suite de pruebas unitarias (Jest) para la lógica de
+negocio más crítica: el cálculo de IVA, la validación de stock y el registro
+transaccional de ventas, y la aplicación FIFO de abonos en la cartera de
+clientes.
+
+```bash
+npm test
+```
+
+Las pruebas **no requieren conexión a una base de datos real**: sustituyen el
+cliente de Prisma por un doble en memoria (`src/test-utils/fakePrisma.ts`), lo
+que las hace rápidas y reproducibles en cualquier máquina, incluida una
+integración continua (CI). Los archivos de prueba están junto a cada servicio
+que validan (`*.service.test.ts`), y cubren, entre otros casos:
+
+- Que un abono se aplique primero a la venta a crédito más antigua (FIFO), y
+  que una venta se marque automáticamente como pagada al llegar a saldo cero.
+- Que una venta se rechace si el producto no tiene stock suficiente, sin
+  modificar el inventario.
+- Que anular una venta restablezca correctamente el inventario descontado.
+- Que el desglose de IVA de $40.000 sea exactamente el del ejemplo del
+  docente mediador (base ≈ $33.613 + IVA ≈ $6.387).
+
 ## Despliegue
 
 1. **Base de datos:** si usas Supabase, sigue la sección **"Conectar con Supabase"** de
@@ -171,7 +271,9 @@ curl -X POST http://localhost:3000/ventas \
    [Railway](https://railway.app) apuntando a este repositorio, con:
    - Build command: `npm install && npm run build && npx prisma generate`
    - Start command: `npm start`
-   - Variables de entorno: `DATABASE_URL`, `DIRECT_URL` y `JWT_SECRET` (las mismas del paso 1).
+   - Variables de entorno: `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, `SUPABASE_URL`,
+     `SUPABASE_SERVICE_ROLE_KEY` y `SUPABASE_STORAGE_BUCKET` (las mismas del paso 1
+     y de la sección "Configurar el bucket de fotos").
 3. Si es la primera vez que despliegas y todavía no has corrido las migraciones contra esta
    base de datos, ejecútalas una vez (puedes hacerlo desde tu computador local, apuntando a
    las mismas variables de entorno de producción):

@@ -1,6 +1,7 @@
 import { EstadoVenta } from '@prisma/client';
 import type { DetalleVenta, Producto, Venta } from '@prisma/client';
 import { prisma } from '../../config/prisma';
+import { descomponerIva, DesgloseIva } from '../../utils/iva';
 
 /**
  * La ganancia se calcula siempre a partir de precioUnitario y costoUnitario,
@@ -73,4 +74,14 @@ export async function obtenerResumenNegocio(desde: Date, hasta: Date) {
     gananciaPeriodo,
     gananciaPotencialInventario,
   };
+}
+
+// RF nuevo (IVA): IVA generado en un periodo, a partir del valor total de las
+// ventas del periodo (que ya incluye IVA), descompuesto en base gravable e IVA.
+export async function obtenerResumenIva(desde: Date, hasta: Date): Promise<DesgloseIva> {
+  const ventas = await prisma.venta.findMany({
+    where: { estado: { not: EstadoVenta.ANULADA }, fecha: { gte: desde, lte: hasta } },
+  });
+  const totalVentasConIva = ventas.reduce((suma: number, v: Venta) => suma + v.valorTotal, 0);
+  return descomponerIva(totalVentasConIva);
 }

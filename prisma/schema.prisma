@@ -15,10 +15,14 @@ generator client {
 }
 
 model Usuario {
-  id             Int     @id @default(autoincrement())
-  usuario        String  @unique
-  contrasenaHash String
-  nombreNegocio  String?
+  id                     Int     @id @default(autoincrement())
+  usuario                String  @unique
+  contrasenaHash         String
+  nombreNegocio          String?
+  // RF-USR-03: recuperación de contraseña mediante pregunta de seguridad
+  // (no hay servicio de correo configurado para enviar un enlace de recuperación).
+  preguntaSeguridad      String?
+  respuestaSeguridadHash String?
 
   @@map("usuarios")
 }
@@ -35,6 +39,8 @@ model Producto {
   cantidadDisponible Int
   activo             Boolean  @default(true)
   fechaCreacion      DateTime @default(now())
+  // RF-INV-10: fotografía del producto, almacenada en Supabase Storage.
+  imagenUrl          String?
 
   movimientos   MovimientoInventario[]
   detalleVentas DetalleVenta[]

@@ -1,5 +1,6 @@
 import { TipoMovimiento } from '@prisma/client';
 import { prisma } from '../../config/prisma';
+import { subirFotoProducto as subirFotoAStorage } from '../../config/supabaseStorage';
 import { ErrorNegocio } from '../../middleware/error.middleware';
 
 interface FiltrosInventario {
@@ -46,6 +47,7 @@ interface DatosProducto {
   costo: number;
   precioVenta: number;
   cantidadDisponible: number;
+  imagenUrl?: string | null;
 }
 
 // RF-INV-01 y RF-GAN-01: registrar producto, incluyendo costo y precio de venta.
@@ -125,6 +127,13 @@ export async function obtenerMovimientos(id: number) {
     where: { productoId: id },
     orderBy: { fecha: 'desc' },
   });
+}
+
+// RF-INV-10: subir/reemplazar la fotografía de un producto.
+export async function subirFoto(id: number, archivo: Buffer, mimeType: string) {
+  await obtenerPorId(id);
+  const imagenUrl = await subirFotoAStorage(id, archivo, mimeType);
+  return prisma.producto.update({ where: { id }, data: { imagenUrl } });
 }
 
 // Valores distintos usados para poblar los chips de filtro en la app (RF-INV-04).

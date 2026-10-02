@@ -37,3 +37,9 @@ export const proyeccionInventario = asyncHandler(async (_req: Request, res: Resp
   const gananciaPotencialInventario = await gananciasService.proyectarGananciaInventario();
   res.json({ gananciaPotencialInventario });
 });
+
+// RF nuevo (IVA): resumen del IVA generado en un periodo.
+export const resumenIva = asyncHandler(async (req: Request, res: Response) => {
+  const { desde, hasta } = leerRangoFechas(req);
+  res.json(await gananciasService.obtenerResumenIva(desde, hasta));
+});

@@ -27,3 +27,44 @@ export async function iniciarSesion(usuario: string, contrasena: string) {
     nombreNegocio: encontrado.nombreNegocio,
   };
 }
+
+// Normaliza la respuesta de seguridad (sin mayúsculas ni espacios extremos) para que
+// la verificación no sea sensible a cómo el usuario escribió la respuesta.
+function normalizarRespuesta(texto: string): string {
+  return texto.trim().toLowerCase();
+}
+
+// RF-USR-03: primer paso de la recuperación de contraseña; devuelve la pregunta de
+// seguridad configurada para el usuario, sin revelar si existe o no de forma distinta
+// a un error genérico (para no filtrar qué usuarios existen en el sistema).
+export async function obtenerPreguntaSeguridad(usuario: string) {
+  const encontrado = await prisma.usuario.findUnique({ where: { usuario } });
+  if (!encontrado || !encontrado.preguntaSeguridad) {
+    throw new ErrorNegocio('No se encontró una pregunta de seguridad configurada para este usuario', 404);
+  }
+  return { preguntaSeguridad: encontrado.preguntaSeguridad };
+}
+
+// RF-USR-03: segundo paso; valida la respuesta de seguridad y, si es correcta,
+// establece la nueva contraseña.
+export async function restablecerContrasena(usuario: string, respuestaSeguridad: string, nuevaContrasena: string) {
+  const encontrado = await prisma.usuario.findUnique({ where: { usuario } });
+  if (!encontrado || !encontrado.respuestaSeguridadHash) {
+    throw new ErrorNegocio('No se encontró una pregunta de seguridad configurada para este usuario', 404);
+  }
+
+  const respuestaValida = await bcrypt.compare(
+    normalizarRespuesta(respuestaSeguridad),
+    encontrado.respuestaSeguridadHash
+  );
+  if (!respuestaValida) {
+    throw new ErrorNegocio('La respuesta de seguridad no es correcta', 401);
+  }
+
+  if (nuevaContrasena.length < 6) {
+    throw new ErrorNegocio('La nueva contraseña debe tener al menos 6 caracteres');
+  }
+
+  const nuevoHash = await bcrypt.hash(nuevaContrasena, 10);
+  await prisma.usuario.update({ where: { usuario }, data: { contrasenaHash: nuevoHash } });
+}
