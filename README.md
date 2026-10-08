@@ -128,6 +128,9 @@ Todas las rutas, excepto `/auth/login`, `/auth/pregunta-seguridad` y
 | POST | `/auth/login` | RF-USR-01 |
 | GET | `/auth/pregunta-seguridad?usuario=` | RF-USR-03 (paso 1) |
 | POST | `/auth/restablecer-contrasena` | RF-USR-03 (paso 2) |
+| POST | `/auth/refrescar` | Seguridad: renovar el token de acceso |
+| POST | `/auth/cerrar-otras-sesiones` | Seguridad: invalidar otras sesiones activas |
+| PUT | `/auth/nombre-negocio` | US-USR-04 |
 | GET | `/productos` | RF-INV-04, RF-INV-05 |
 | GET | `/productos/filtros` | valores para talla/color/categoría |
 | POST | `/productos` | RF-INV-01, RF-GAN-01 |
@@ -137,7 +140,7 @@ Todas las rutas, excepto `/auth/login`, `/auth/pregunta-seguridad` y
 | GET | `/productos/:id/movimientos` | RF-INV-09 |
 | POST | `/productos/:id/foto` (multipart, campo `foto`) | RF-INV-10 |
 | POST | `/ventas` | RF-VEN-01 a RF-VEN-04, RF-INV-07 |
-| GET | `/ventas` | RF-VEN-05 |
+| GET | `/ventas?desde=&hasta=&clienteId=&productoId=` | RF-VEN-05 |
 | PATCH | `/ventas/:id/anular` | RF-VEN-06 |
 | GET | `/cartera` | RF-CAR-07 |
 | POST | `/cartera/clientes` | RF-CAR-01 |
@@ -162,6 +165,28 @@ curl -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"usuario": "tienda.ropa", "contrasena": "1234abcd"}'
 ```
+Respuesta: `{ "token": "...", "refreshToken": "...", "usuario": "tienda.ropa", "nombreNegocio": "..." }`.
+`token` es el **token de acceso** (dura 15 minutos, se usa en cada petición);
+`refreshToken` dura 30 días y solo sirve para pedir un nuevo `token` cuando expire.
+
+### Ejemplo: renovar el token de acceso
+
+```bash
+curl -X POST http://localhost:3000/auth/refrescar \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "<REFRESH_TOKEN_OBTENIDO_EN_EL_LOGIN>"}'
+```
+
+### Ejemplo: cerrar cualquier otra sesión activa
+
+Útil si se pierde o roba el dispositivo: inicia sesión en uno de confianza y llama:
+
+```bash
+curl -X POST http://localhost:3000/auth/cerrar-otras-sesiones \
+  -H "Authorization: Bearer <TOKEN_DE_ACCESO_DEL_DISPOSITIVO_DE_CONFIANZA>"
+```
+Esto invalida de inmediato el token de acceso y de refresco de cualquier otro
+dispositivo donde se había iniciado sesión antes (incluido el robado/perdido).
 
 ### Ejemplo: recuperar contraseña
 
@@ -203,6 +228,37 @@ curl -X POST http://localhost:3000/ventas \
       }'
 ```
 
+### Ejemplo: registrar una venta a crédito con adelanto inicial
+
+```bash
+curl -X POST http://localhost:3000/ventas \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN_OBTENIDO_EN_EL_LOGIN>" \
+  -d '{
+        "items": [{ "productoId": 1, "cantidad": 2 }],
+        "formaPago": "CREDITO",
+        "clienteId": 1,
+        "adelantoInicial": 20000
+      }'
+```
+`adelantoInicial` es opcional y solo aplica a ventas a crédito (RF-CAR-03); se
+registra automáticamente como el primer abono de esa venta. Si el adelanto
+cubre el valor total, la venta queda marcada como pagada desde su creación.
+
+### Ejemplo: consultar el historial de ventas con filtros
+
+```bash
+# Todas las ventas de un cliente en septiembre de 2026
+curl "http://localhost:3000/ventas?clienteId=1&desde=2026-09-01&hasta=2026-09-30" \
+  -H "Authorization: Bearer <TOKEN_OBTENIDO_EN_EL_LOGIN>"
+
+# Todas las ventas donde se vendió un producto específico
+curl "http://localhost:3000/ventas?productoId=3" \
+  -H "Authorization: Bearer <TOKEN_OBTENIDO_EN_EL_LOGIN>"
+```
+Los filtros son independientes entre sí y pueden combinarse; cualquiera que se
+omita simplemente no se aplica.
+
 ## Actualizar una instalación ya desplegada
 
 Si ya tenías este backend corriendo (por ejemplo, en Render) antes de que se agregaran
@@ -221,6 +277,21 @@ actualiza la pregunta de seguridad del usuario existente (ver Sección "Credenci
 de prueba" más abajo). No olvides completar también las nuevas variables
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `SUPABASE_STORAGE_BUCKET` en Render.
 
+### Migración adicional: tokens de acceso/refresco (seguridad)
+
+Esta ronda agregó la columna `tokenVersion` en `usuarios` (ver Sección
+"Renovación de tokens" más abajo). Si ya aplicaste la migración anterior,
+solo falta:
+
+```bash
+npx prisma generate
+npx prisma migrate dev --name agregar_tokenversion
+```
+
+No hace falta volver a correr el `seed` para este cambio: `tokenVersion` tiene
+un valor por defecto (`1`) que Prisma asigna automáticamente a los usuarios
+existentes.
+
 ## Configurar el bucket de fotos (Supabase Storage)
 
 RF-INV-10 (foto de producto) sube las imágenes a Supabase Storage, en el mismo
@@ -238,12 +309,35 @@ proyecto donde ya está la base de datos. Antes de usarlo:
 Si estas variables no están configuradas, el endpoint `/productos/:id/foto`
 responde con un error claro en vez de fallar de forma silenciosa.
 
+## Renovación de tokens y otras mejoras de seguridad
+
+Dos mejoras pendientes, identificadas en la Política de Seguridad del
+proyecto, quedaron implementadas:
+
+**Límite de intentos (rate limiting).** Las rutas `/auth/login`,
+`/auth/pregunta-seguridad` y `/auth/restablecer-contrasena` aceptan máximo 5
+intentos cada 15 minutos por dirección IP, para mitigar ataques de fuerza
+bruta sobre la contraseña o la pregunta de seguridad.
+
+**Tokens de acceso y de refresco.** Antes, el login emitía un único token
+válido por 30 días, sin forma de invalidarlo antes de su expiración. Ahora:
+- El **token de acceso** (`token`) dura solo 15 minutos y es el que se envía
+  en cada petición a una ruta protegida.
+- El **token de refresco** (`refreshToken`) dura 30 días y solo sirve para
+  pedir un nuevo token de acceso en `POST /auth/refrescar`, sin volver a pedir
+  usuario y contraseña.
+- `POST /auth/cerrar-otras-sesiones` invalida de inmediato **todos** los
+  tokens emitidos hasta ese momento (de acceso y de refresco), útil si se
+  pierde o roba el dispositivo. Internamente incrementa un contador
+  (`tokenVersion`) que el middleware de autenticación compara en cada
+  petición; cambiar la contraseña hace lo mismo automáticamente.
+
 ## Pruebas automatizadas
 
 El backend incluye una suite de pruebas unitarias (Jest) para la lógica de
 negocio más crítica: el cálculo de IVA, la validación de stock y el registro
-transaccional de ventas, y la aplicación FIFO de abonos en la cartera de
-clientes.
+transaccional de ventas, la aplicación FIFO de abonos en la cartera de
+clientes, y la emisión/renovación/revocación de tokens de autenticación.
 
 ```bash
 npm test
@@ -262,6 +356,9 @@ que validan (`*.service.test.ts`), y cubren, entre otros casos:
 - Que anular una venta restablezca correctamente el inventario descontado.
 - Que el desglose de IVA de $40.000 sea exactamente el del ejemplo del
   docente mediador (base ≈ $33.613 + IVA ≈ $6.387).
+- Que un token de refresco deje de funcionar inmediatamente después de llamar
+  a `cerrar-otras-sesiones` o de cambiar la contraseña, aunque todavía no haya
+  expirado.
 
 ## Despliegue
 

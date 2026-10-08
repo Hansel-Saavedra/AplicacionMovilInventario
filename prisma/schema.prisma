@@ -23,6 +23,11 @@ model Usuario {
   // (no hay servicio de correo configurado para enviar un enlace de recuperación).
   preguntaSeguridad      String?
   respuestaSeguridadHash String?
+  // Seguridad: se incrementa para invalidar de golpe todos los tokens (de acceso
+  // y de refresco) emitidos antes de ese momento — por ejemplo, si se pierde el
+  // teléfono o se cambia la contraseña. El middleware de autenticación compara
+  // este valor con el que viaja dentro de cada token recibido.
+  tokenVersion           Int     @default(1)
 
   @@map("usuarios")
 }

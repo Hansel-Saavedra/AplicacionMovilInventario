@@ -97,6 +97,124 @@ describe('registrarVenta', () => {
   });
 });
 
+describe('listarVentas (filtros, RF-VEN-05)', () => {
+  const ANTIGUA = new Date('2026-08-01T12:00:00Z');
+  const RECIENTE = new Date('2026-09-20T12:00:00Z');
+
+  beforeEach(async () => {
+    db.clientes.push({ id: 2, nombre: 'Otro cliente', telefono: null });
+    // Venta 1: antigua, de contado, producto 1.
+    await ventasService.registrarVenta([{ productoId: 1, cantidad: 1 }], 'CONTADO' as any, null);
+    db.ventas[0].fecha = ANTIGUA;
+    // Venta 2: reciente, a crédito del cliente 1, producto 2.
+    await ventasService.registrarVenta([{ productoId: 2, cantidad: 1 }], 'CREDITO' as any, 1);
+    db.ventas[1].fecha = RECIENTE;
+    // Venta 3: reciente, a crédito del cliente 2, producto 1.
+    await ventasService.registrarVenta([{ productoId: 1, cantidad: 1 }], 'CREDITO' as any, 2);
+    db.ventas[2].fecha = RECIENTE;
+  });
+
+  it('sin filtros, retorna todas las ventas', async () => {
+    const ventas = await ventasService.listarVentas();
+    expect(ventas).toHaveLength(3);
+  });
+
+  it('filtra por rango de fechas', async () => {
+    const ventas = await ventasService.listarVentas({
+      desde: new Date('2026-09-01T00:00:00Z'),
+      hasta: new Date('2026-09-30T23:59:59Z'),
+    });
+    expect(ventas).toHaveLength(2);
+    expect(ventas.every((v) => v.fecha >= new Date('2026-09-01T00:00:00Z'))).toBe(true);
+  });
+
+  it('filtra por cliente', async () => {
+    const ventas = await ventasService.listarVentas({ clienteId: 1 });
+    expect(ventas).toHaveLength(1);
+    expect(ventas[0].clienteId).toBe(1);
+  });
+
+  it('filtra por producto', async () => {
+    const ventas = await ventasService.listarVentas({ productoId: 1 });
+    // Las ventas 1 y 3 incluyen el producto 1; la venta 2 no.
+    expect(ventas).toHaveLength(2);
+  });
+
+  it('combina varios filtros a la vez', async () => {
+    const ventas = await ventasService.listarVentas({ clienteId: 2, productoId: 1 });
+    expect(ventas).toHaveLength(1);
+    expect(ventas[0].clienteId).toBe(2);
+  });
+
+  it('retorna una lista vacía si ningún criterio coincide', async () => {
+    const ventas = await ventasService.listarVentas({ clienteId: 999 });
+    expect(ventas).toHaveLength(0);
+  });
+});
+
+describe('registrarVenta con adelanto inicial (RF-CAR-03)', () => {
+  it('registra el adelanto como el primer abono de la venta, y el saldo refleja la resta', async () => {
+    const venta = await ventasService.registrarVenta(
+      [{ productoId: 1, cantidad: 1 }], // 45000
+      'CREDITO' as any,
+      1,
+      20000
+    );
+
+    expect(venta?.valorTotal).toBe(45000);
+    expect(venta?.estado).toBe('PENDIENTE');
+
+    const abono = db.abonos.find((a) => a.ventaId === venta!.id);
+    expect(abono?.monto).toBe(20000);
+  });
+
+  it('marca la venta como PAGADA desde su creación si el adelanto cubre el total', async () => {
+    const venta = await ventasService.registrarVenta(
+      [{ productoId: 1, cantidad: 1 }], // 45000
+      'CREDITO' as any,
+      1,
+      45000
+    );
+
+    expect(venta?.estado).toBe('PAGADA');
+  });
+
+  it('rechaza un adelanto mayor al valor total de la venta', async () => {
+    await expect(
+      ventasService.registrarVenta([{ productoId: 1, cantidad: 1 }], 'CREDITO' as any, 1, 100000)
+    ).rejects.toThrow('no puede ser mayor al valor total');
+
+    // No debe haberse creado ninguna venta ni abono ante el rechazo.
+    expect(db.ventas).toHaveLength(0);
+    expect(db.abonos).toHaveLength(0);
+  });
+
+  it('rechaza un adelanto negativo', async () => {
+    await expect(
+      ventasService.registrarVenta([{ productoId: 1, cantidad: 1 }], 'CREDITO' as any, 1, -5000)
+    ).rejects.toThrow('no puede ser negativo');
+  });
+
+  it('no crea ningún abono si no se especifica adelanto', async () => {
+    const venta = await ventasService.registrarVenta([{ productoId: 1, cantidad: 1 }], 'CREDITO' as any, 1);
+
+    expect(venta?.estado).toBe('PENDIENTE');
+    expect(db.abonos).toHaveLength(0);
+  });
+
+  it('ignora el adelanto si la venta es de contado (no tiene sentido en ese caso)', async () => {
+    const venta = await ventasService.registrarVenta(
+      [{ productoId: 1, cantidad: 1 }],
+      'CONTADO' as any,
+      null,
+      20000
+    );
+
+    expect(venta?.estado).toBe('PAGADA');
+    expect(db.abonos).toHaveLength(0);
+  });
+});
+
 describe('anularVenta', () => {
   it('revierte el inventario descontado y marca la venta como ANULADA', async () => {
     const venta = await ventasService.registrarVenta([{ productoId: 1, cantidad: 4 }], 'CONTADO' as any, null);

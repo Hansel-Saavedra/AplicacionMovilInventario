@@ -11,6 +11,11 @@ import ventasRoutes from './modules/ventas/ventas.routes';
 
 const app = express();
 
+// Render (y la mayoría de PaaS) colocan la app detrás de un proxy inverso; sin
+// esto, express-rate-limit vería la IP del proxy en vez de la del cliente real,
+// y limitaría a todos los usuarios como si fueran uno solo.
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(cors());
 app.use(express.json());

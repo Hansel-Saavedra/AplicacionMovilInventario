@@ -8,13 +8,25 @@ interface ItemVenta {
 }
 
 /**
- * RF-VEN-01, RF-VEN-02, RF-VEN-03, RF-VEN-04, RF-INV-07: registra una venta de forma
- * transaccional. Es la traducción directa de VentaRepository.registrarVenta() de la
- * app Android: valida stock disponible para cada línea, calcula el total, crea la
- * venta y su detalle, descuenta el inventario y registra el movimiento de salida.
- * Si cualquier paso falla, la transacción completa se revierte (no se guarda nada).
+ * RF-VEN-01, RF-VEN-02, RF-VEN-03, RF-VEN-04, RF-INV-07, RF-CAR-03: registra
+ * una venta de forma transaccional. Es la traducción directa de
+ * VentaRepository.registrarVenta() de la app Android: valida stock disponible
+ * para cada línea, calcula el total, crea la venta y su detalle, descuenta el
+ * inventario y registra el movimiento de salida. Si cualquier paso falla, la
+ * transacción completa se revierte (no se guarda nada).
+ *
+ * Si la venta es a crédito y se recibe un adelanto inicial (RF-CAR-03), se
+ * registra automáticamente como el primer abono de esa venta, en la misma
+ * transacción; si el adelanto cubre el valor total, la venta queda marcada
+ * como pagada desde su creación (misma regla que aplica cartera.service.ts
+ * cuando un abono posterior hace que el saldo llegue a cero).
  */
-export async function registrarVenta(items: ItemVenta[], formaPago: FormaPago, clienteId?: number | null) {
+export async function registrarVenta(
+  items: ItemVenta[],
+  formaPago: FormaPago,
+  clienteId?: number | null,
+  adelantoInicial?: number
+) {
   if (!items || items.length === 0) {
     throw new ErrorNegocio('La venta debe tener al menos un producto');
   }
@@ -41,7 +53,17 @@ export async function registrarVenta(items: ItemVenta[], formaPago: FormaPago, c
       total += producto.precioVenta * item.cantidad;
     });
 
-    const estadoInicial = formaPago === FormaPago.CONTADO ? EstadoVenta.PAGADA : EstadoVenta.PENDIENTE;
+    // RF-CAR-03: el adelanto inicial solo tiene sentido en ventas a crédito.
+    const adelanto = formaPago === FormaPago.CREDITO ? adelantoInicial : undefined;
+    if (adelanto !== undefined) {
+      if (adelanto < 0) throw new ErrorNegocio('El adelanto no puede ser negativo');
+      if (adelanto > total) throw new ErrorNegocio('El adelanto no puede ser mayor al valor total de la venta');
+    }
+
+    const estadoInicial =
+      formaPago === FormaPago.CONTADO || (adelanto !== undefined && adelanto >= total)
+        ? EstadoVenta.PAGADA
+        : EstadoVenta.PENDIENTE;
 
     const venta = await tx.venta.create({
       data: {
@@ -81,6 +103,12 @@ export async function registrarVenta(items: ItemVenta[], formaPago: FormaPago, c
       });
     }
 
+    if (adelanto !== undefined && adelanto > 0) {
+      await tx.abono.create({
+        data: { ventaId: venta.id, monto: adelanto },
+      });
+    }
+
     return tx.venta.findUnique({
       where: { id: venta.id },
       include: { detalles: true },
@@ -88,9 +116,34 @@ export async function registrarVenta(items: ItemVenta[], formaPago: FormaPago, c
   });
 }
 
-// RF-VEN-05: historial de ventas.
-export async function listarVentas() {
+export interface FiltrosVentas {
+  desde?: Date;
+  hasta?: Date;
+  clienteId?: number;
+  productoId?: number;
+}
+
+// RF-VEN-05: historial de ventas, con filtros opcionales por fecha, cliente y
+// producto (el criterio de aceptación exige que los filtros aplicados
+// devuelvan únicamente las ventas que cumplen el criterio seleccionado).
+export async function listarVentas(filtros: FiltrosVentas = {}) {
+  const where: Record<string, unknown> = {};
+
+  if (filtros.desde || filtros.hasta) {
+    const fecha: Record<string, Date> = {};
+    if (filtros.desde) fecha.gte = filtros.desde;
+    if (filtros.hasta) fecha.lte = filtros.hasta;
+    where.fecha = fecha;
+  }
+  if (filtros.clienteId !== undefined) {
+    where.clienteId = filtros.clienteId;
+  }
+  if (filtros.productoId !== undefined) {
+    where.detalles = { some: { productoId: filtros.productoId } };
+  }
+
   return prisma.venta.findMany({
+    where,
     orderBy: { fecha: 'desc' },
     include: { detalles: true },
   });

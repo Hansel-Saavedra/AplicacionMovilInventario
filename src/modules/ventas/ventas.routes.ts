@@ -3,7 +3,7 @@ import * as ventasController from './ventas.controller';
 
 const router = Router();
 
-// GET  /ventas          -> RF-VEN-05 (historial de ventas)
+// GET  /ventas?desde=&hasta=&clienteId=&productoId= -> RF-VEN-05 (historial de ventas, con filtros)
 // POST /ventas          -> RF-VEN-01, RF-VEN-02, RF-VEN-03, RF-VEN-04 (registrar venta)
 // PATCH /ventas/:id/anular -> RF-VEN-06 (anular venta)
 

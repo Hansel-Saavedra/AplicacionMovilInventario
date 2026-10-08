@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { AuthRequest } from '../../middleware/auth.middleware';
 import { asyncHandler, ErrorNegocio } from '../../middleware/error.middleware';
 import * as authService from './auth.service';
 
@@ -26,4 +27,27 @@ export const restablecerContrasena = asyncHandler(async (req: Request, res: Resp
   }
   await authService.restablecerContrasena(usuario, respuestaSeguridad, nuevaContrasena);
   res.json({ mensaje: 'Contraseña actualizada correctamente' });
+});
+
+// Seguridad: renovar el token de acceso usando el token de refresco.
+export const refrescar = asyncHandler(async (req: Request, res: Response) => {
+  const { refreshToken } = req.body ?? {};
+  if (!refreshToken) throw new ErrorNegocio('El token de refresco es obligatorio');
+  res.json(await authService.refrescarToken(refreshToken));
+});
+
+// Seguridad: cerrar cualquier otra sesión activa (requiere estar autenticado
+// con un token de acceso vigente en el dispositivo desde el que se llama).
+export const cerrarOtrasSesiones = asyncHandler(async (req: AuthRequest, res: Response) => {
+  await authService.cerrarOtrasSesiones(req.usuario!.usuarioId);
+  res.json({ mensaje: 'Se cerraron todas las demás sesiones' });
+});
+
+// US-USR-04: registrar/actualizar el nombre del negocio.
+export const actualizarNombreNegocio = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { nombreNegocio } = req.body ?? {};
+  if (!nombreNegocio || typeof nombreNegocio !== 'string') {
+    throw new ErrorNegocio('El nombre del negocio es obligatorio');
+  }
+  res.json(await authService.actualizarNombreNegocio(req.usuario!.usuarioId, nombreNegocio));
 });

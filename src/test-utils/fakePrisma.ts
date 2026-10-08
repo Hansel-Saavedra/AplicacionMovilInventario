@@ -6,6 +6,16 @@
  * lo suficiente para que las pruebas de comportamiento sean fieles.
  */
 
+export interface FakeUsuario {
+  id: number;
+  usuario: string;
+  contrasenaHash: string;
+  nombreNegocio: string | null;
+  preguntaSeguridad: string | null;
+  respuestaSeguridadHash: string | null;
+  tokenVersion: number;
+}
+
 export interface FakeCliente {
   id: number;
   nombre: string;
@@ -47,6 +57,7 @@ export interface FakeDetalleVenta {
 }
 
 export interface FakeDb {
+  usuarios: FakeUsuario[];
   clientes: FakeCliente[];
   ventas: FakeVenta[];
   abonos: FakeAbono[];
@@ -55,11 +66,12 @@ export interface FakeDb {
 }
 
 export function crearBaseDeDatosVacia(): FakeDb {
-  return { clientes: [], ventas: [], abonos: [], productos: [], detalleVentas: [] };
+  return { usuarios: [], clientes: [], ventas: [], abonos: [], productos: [], detalleVentas: [] };
 }
 
 /** Vacía (en el mismo objeto) una base de datos falsa, para reiniciar el estado entre pruebas. */
 export function limpiarBaseDeDatos(db: FakeDb): void {
+  db.usuarios.length = 0;
   db.clientes.length = 0;
   db.ventas.length = 0;
   db.abonos.length = 0;
@@ -85,6 +97,29 @@ export function crearFakePrisma(db: FakeDb) {
   }
 
   const fake: any = {
+    usuario: {
+      findUnique: jest.fn(async (args: any) => {
+        const campo = args.where.id !== undefined ? 'id' : 'usuario';
+        const valor = args.where.id !== undefined ? args.where.id : args.where.usuario;
+        const encontrado = db.usuarios.find((u) => (u as any)[campo] === valor);
+        return encontrado ? { ...encontrado } : null;
+      }),
+      update: jest.fn(async (args: any) => {
+        const campo = args.where.id !== undefined ? 'id' : 'usuario';
+        const valor = args.where.id !== undefined ? args.where.id : args.where.usuario;
+        const usr = db.usuarios.find((u) => (u as any)[campo] === valor);
+        if (!usr) throw new Error('Usuario no encontrado en el fake');
+        if (args.data.tokenVersion?.increment !== undefined) {
+          usr.tokenVersion += args.data.tokenVersion.increment;
+          const { tokenVersion, ...resto } = args.data;
+          Object.assign(usr, resto);
+        } else {
+          Object.assign(usr, args.data);
+        }
+        return { ...usr };
+      }),
+    },
+
     cliente: {
       findMany: jest.fn(async () => [...db.clientes]),
       findUnique: jest.fn(async (args: any) => db.clientes.find((c) => c.id === args.where.id) ?? null),
@@ -116,6 +151,12 @@ export function crearFakePrisma(db: FakeDb) {
             if (where.estado?.not !== undefined && v.estado === where.estado.not) return false;
           }
           if (!coincideFecha(v.fecha, where.fecha)) return false;
+          if (where.detalles?.some?.productoId !== undefined) {
+            const tieneProducto = db.detalleVentas.some(
+              (d) => d.ventaId === v.id && d.productoId === where.detalles.some.productoId
+            );
+            if (!tieneProducto) return false;
+          }
           return true;
         });
         if (args?.orderBy?.fecha === 'asc') resultado = [...resultado].sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
